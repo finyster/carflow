@@ -1,0 +1,25 @@
+video_path: videos/my_road_120s.mp4
+model_path: yolov8s.pt
+classes: [car, bus, truck, motorcycle]
+tracker_type: deepsort            # deepsort 或 sort
+
+routes:
+- name: route1
+  entry:
+    p1: [748, 621]
+    p2: [1116, 664]
+  exit:
+    p1: [362, 665]
+    p2: [1038, 784]
+- name: route2
+  entry:
+    p1: [1168, 757]
+    p2: [1747, 786]
+  exit:
+    p1: [1136, 667]
+    p2: [1610, 710]
+
+skip_frame: 1                     # 每 N+1 幀做一次偵測
+show_fps: true
+save_csv: results/counts.csv
+save_video: results/annotated.mp4
