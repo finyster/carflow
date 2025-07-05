@@ -1,18 +1,12 @@
-"""
-main.py – YOLOv8 + Centroid Tracker（Route1 / Route2 車流計數）
----------------------------------------------------------------
-‧ 讀取 config.yaml 的影片路徑、Entry / Exit 線
-‧ YOLOv8 偵測 → 自製 Tracker（tracker.py）配唯一 ID
-‧ 判斷車輛跨 Entry/Exit → routeN:序號 car 標籤
-‧ 即時顯示計數、FPS，並輸出標記影片 + CSV
-"""
+# nightMain.py – 最終修正版 v2
 import os, csv, time, yaml, cv2
 import numpy as np
 from collections import defaultdict
 from ultralytics import YOLO
-from utils.tracker import Tracker   # ← 你的 tracker.py
+# 確保您的 tracker.py 檔案在 utils 資料夾中
+from utils.tracker import Tracker
 
-# ---------- 幾何工具 ----------
+# ---------- 幾何工具 (無變動) ----------
 def ccw(a, b, c):
     return (c[1]-a[1])*(b[0]-a[0]) > (b[1]-a[1])*(c[0]-a[0])
 
@@ -21,144 +15,167 @@ def crossed(p_prev, p_now, l1, l2):
 
 def get_color(cls):
     pal = {
-        "car": (0,255,255),
-        "bus": (255,0,0),
-        "truck": (0,0,255),
-        "motorcycle": (0,255,0)   # 新增摩托車（綠色）
+        "car": (0,255,255), "bus": (255,0,0),
+        "truck": (0,0,255), "motorcycle": (0,255,0)
     }
     return pal.get(cls, (200,200,200))
 
-# ---------- 讀取 config ----------
-with open("config.yaml") as f:
-    cfg = yaml.safe_load(f)
+# ---------- 主要執行區塊 ----------
+def main():
+    # 1. 讀取設定檔
+    try:
+        with open("night_config.yaml") as f:
+            cfg = yaml.safe_load(f)
+    except FileNotFoundError:
+        print("❌ 錯誤：找不到 night_config.yaml 設定檔！")
+        return
 
-routes = cfg["routes"]             # Entry / Exit 線設定
-TARGET_CLASSES = cfg.get("classes",["car","bus","truck", "motorcycle"])
+    # 從設定檔讀取參數
+    video_path = cfg.get("video_path")
+    model_path = cfg.get("model_path", "yolov8s.pt")
+    output_video_path = cfg.get("save_video", "results/output.mp4")
+    output_csv_path = cfg.get("save_csv", "results/counts.csv")
+    target_classes = cfg.get("classes", ["car", "bus", "truck", "motorcycle"])
+    skip_frame = cfg.get("skip_frame", 1)
+    routes = cfg.get("routes", [])
 
-# ---------- YOLOv8 ----------
-model = YOLO(cfg.get("model_path","yolov8s.pt"))
-CLASSES = [c.strip() for c in open("coco.txt").readlines()]
-CLS2ID = {c:i for i,c in enumerate(CLASSES)}
+    # 2. 初始化模型與工具
+    print("初始化模型...")
+    model = YOLO(model_path)
+    try:
+        with open("coco.txt") as f:
+            CLASSES = [c.strip() for c in f.readlines()]
+    except FileNotFoundError:
+        print("❌ 錯誤：找不到 coco.txt 類別檔！")
+        return
+    tracker = Tracker()
 
-# ---------- Tracker ----------
-tracker = Tracker()   # 簡易中心點追蹤
+    # 3. 初始化影片讀取與寫入
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"❌ 錯誤：無法開啟影片檔案：{video_path}")
+        return
 
-# ---------- 影片 I/O ----------
-cap = cv2.VideoCapture(cfg["video_path"])
-W,H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-FPS = cap.get(cv2.CAP_PROP_FPS) or 30
-os.makedirs("results",exist_ok=True)
-out = cv2.VideoWriter("results/annotated.mp4",cv2.VideoWriter_fourcc(*"mp4v"),FPS,(W,H))
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    FPS = cap.get(cv2.CAP_PROP_FPS) or 30
 
-# ---------- 統計 ----------
-route_serials = defaultdict(lambda: defaultdict(int))
-vehicle_info  = {}   # id → {route,serial,class}
-route_counts  = defaultdict(lambda: defaultdict(int))
-last_center   = {}
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    os.makedirs("results", exist_ok=True)
+    out = cv2.VideoWriter(output_video_path, fourcc, FPS, (W, H))
 
-# ---------- 主迴圈 ----------
-frame_idx, t0 = 0, time.time()
-while True:
-    ret, frame = cap.read()
-    if not ret: break
-    frame_idx+=1
-    if frame_idx % (cfg.get("skip_frame",1)+1): out.write(frame); continue
+    if not out.isOpened():
+        print(f"❌ 錯誤：無法初始化影片寫入器。請檢查您的 OpenCV/FFmpeg 安裝。")
+        cap.release()
+        return
 
-    # ---------- YOLO 偵測 ----------
-    results = model(frame,verbose=False)[0]
-    dets   = []  # [x1,y1,x2,y2]
-    det_cls= []  # class name
-    for box in results.boxes:
-        cls_name = CLASSES[int(box.cls[0])]
-        if cls_name not in TARGET_CLASSES: continue
-        x1,y1,x2,y2 = map(int,box.xyxy[0].tolist())
-        dets.append([x1,y1,x2,y2])
-        det_cls.append(cls_name)
+    # 4. 初始化統計變數
+    vehicle_info, last_center = {}, {}
+    route_counts = defaultdict(lambda: defaultdict(int))
+    route_serials = defaultdict(lambda: defaultdict(int))
+    frame_idx, t0 = 0, time.time()
 
-    # ---------- Tracker 更新 ----------
-    # Tracker 需 (x,y,w,h)
-    cv_rectangles = []
-    for (x1,y1,x2,y2) in dets:
-        cv_rectangles.append([x1,y1,x2-x1,y2-y1])  # 轉 w,h
-    tracks = tracker.update(cv_rectangles)         # 回傳 [x,y,w,h,id]
+    print(f"🚀 開始處理影片：{video_path}")
 
-    # ---------- 每台車處理 ----------
-    # ---------- 每台車處理 ----------
-    for (x, y, w, h, tid), cls_name in zip(tracks, det_cls):
-        x1, y1, x2, y2 = x, y, x + w, y + h
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        cur = (cx, cy)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("\n影片處理完成。")
+                break
+            frame_idx += 1
 
-        # 只有這台車之前出現過，才判斷是否跨線
-        if tid in last_center:
-            prev_center = last_center[tid]
+            if frame_idx % 100 == 0:
+                elapsed_time = time.time() - t0
+                fps_estimate = frame_idx / elapsed_time if elapsed_time > 0 else 0
+                print(f"  處理中... 第 {frame_idx} 幀 (當前速度: {fps_estimate:.1f} FPS)")
 
-            # STEP-1 只在進入時指定 route（不計數不給序號）
-            if tid not in vehicle_info:
-                for rt in routes:
-                    ent1, ent2 = tuple(rt["entry"]["p1"]), tuple(rt["entry"]["p2"])
-                    if crossed(prev_center, cur, ent1, ent2):
-                        vehicle_info[tid] = {
-                            "route": rt["name"],
-                            "serial": None,  # 還沒給序號
-                            "class": cls_name
-                        }
-                        break
+            # AI 偵測與追蹤邏輯
+            results = model(frame, verbose=False)[0]
+            dets, det_cls = [], []
+            for box in results.boxes:
+                cls_name = CLASSES[int(box.cls[0])]
+                if cls_name in target_classes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    dets.append([x1, y1, x2, y2])
+                    det_cls.append(cls_name)
 
-            # STEP-2 只有越過出口線才 assign serial、計數
-            elif vehicle_info[tid]["serial"] is None:
-                rt_name = vehicle_info[tid]["route"]
-                rt_cfg = next(r for r in routes if r["name"] == rt_name)
-                ext1, ext2 = tuple(rt_cfg["exit"]["p1"]), tuple(rt_cfg["exit"]["p2"])
-                if crossed(prev_center, cur, ext1, ext2):
-                    route_serials[rt_name][cls_name] += 1
-                    serial = route_serials[rt_name][cls_name]
-                    vehicle_info[tid]["serial"] = serial    # 這時才給序號
-                    route_counts[rt_name][cls_name] += 1    # 這時才+1計數
+            rects = [[x, y, x2-x, y2-y] for (x, y, x2, y2) in dets]
+            tracks = tracker.update(rects)
 
-        # 記錄這一幀中心點（for 下一幀判斷用）
-        last_center[tid] = cur
+            # 跨線計數與繪圖邏輯
+            for (x, y, w, h, tid), cls_name in zip(tracks, det_cls):
+                cx, cy = x + w // 2, y + h // 2
+                if tid in last_center:
+                    prev_center = last_center[tid]
+                    if tid not in vehicle_info:
+                        for rt_cfg in routes:
+                            pt1 = (int(rt_cfg["entry"]["p1"][0]), int(rt_cfg["entry"]["p1"][1]))
+                            pt2 = (int(rt_cfg["entry"]["p2"][0]), int(rt_cfg["entry"]["p2"][1]))
+                            if crossed(prev_center, (cx, cy), pt1, pt2):
+                                vehicle_info[tid] = {"route": rt_cfg["name"], "serial": None, "class": cls_name}
+                                break
+                    elif vehicle_info[tid]["serial"] is None:
+                        rt_name = vehicle_info[tid]["route"]
+                        rt_cfg = next((r for r in routes if r["name"] == rt_name), None)
+                        if rt_cfg:
+                            pt1 = (int(rt_cfg["exit"]["p1"][0]), int(rt_cfg["exit"]["p1"][1]))
+                            pt2 = (int(rt_cfg["exit"]["p2"][0]), int(rt_cfg["exit"]["p2"][1]))
+                            if crossed(prev_center, (cx, cy), pt1, pt2):
+                                route_serials[rt_name][cls_name] += 1
+                                serial = route_serials[rt_name][cls_name]
+                                vehicle_info[tid]["serial"] = serial
+                                route_counts[rt_name][cls_name] += 1
+                last_center[tid] = (cx, cy)
 
+                # 繪製標籤與框線
+                color = get_color(cls_name)
+                label = f'{cls_name} ID:{tid}'
+                if tid in vehicle_info and vehicle_info[tid]["serial"]:
+                    label = f'{vehicle_info[tid]["route"]}:{vehicle_info[tid]["serial"]} {cls_name}'
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        # 畫框
-        color=get_color(cls_name)
-        cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-        if tid in vehicle_info and vehicle_info[tid]["serial"]:
-            label=f'{vehicle_info[tid]["route"]}:{vehicle_info[tid]["serial"]} {cls_name}'
-        else:
-            label=f'{cls_name} ID:{tid}'
-        cv2.putText(frame,label,(x1,y1-10),cv2.FONT_HERSHEY_SIMPLEX,0.6,color,2)
+            # 繪製路線與統計數據
+            for rt_cfg in routes:
+                entry_p1 = (int(rt_cfg["entry"]["p1"][0]), int(rt_cfg["entry"]["p1"][1]))
+                entry_p2 = (int(rt_cfg["entry"]["p2"][0]), int(rt_cfg["entry"]["p2"][1]))
+                exit_p1 = (int(rt_cfg["exit"]["p1"][0]), int(rt_cfg["exit"]["p1"][1]))
+                exit_p2 = (int(rt_cfg["exit"]["p2"][0]), int(rt_cfg["exit"]["p2"][1]))
+                cv2.line(frame, entry_p1, entry_p2, (0, 255, 0), 2)
+                cv2.line(frame, exit_p1, exit_p2, (0, 0, 255), 2)
 
-    # ---------- 畫 Entry/Exit 線 ----------
-    for rt in routes:
-        ent1,ent2=tuple(rt["entry"]["p1"]),tuple(rt["entry"]["p2"])
-        ext1,ext2=tuple(rt["exit"]["p1"]), tuple(rt["exit"]["p2"])
-        cv2.line(frame,ent1,ent2,(0,255,0),2)
-        cv2.putText(frame,f'{rt["name"]}_entry',ent1,cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,255,0),2)
-        cv2.line(frame,ext1,ext2,(0,0,255),2)
-        cv2.putText(frame,f'{rt["name"]}_exit',ext1,cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,0,255),2)
+            y0 = 40
+            # 【修正】這裡的 rt 就是路線名稱 (字串)，不應該用 rt["name"]
+            for i, (rt_name, cnts) in enumerate(route_counts.items()):
+                txt = f'{rt_name}: ' + ' | '.join([f'{k}={v}' for k, v in cnts.items()])
+                cv2.putText(frame, txt, (20, y0 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-    # ---------- 畫統計 ----------
-    y0=40
-    for i,(rt,cnts) in enumerate(route_counts.items()):
-        txt=f'{rt}: '+'  '.join([f'{k}={v}' for k,v in cnts.items()])
-        cv2.putText(frame,txt,(20,y0+i*30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(255,255,0),2)
+            out.write(frame)
 
-    # ---------- FPS ----------
-    fps=frame_idx/(time.time()-t0+1e-6)
-    cv2.putText(frame,f'FPS:{fps:.1f}',(W-150,30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(255,255,255),2)
+    except Exception as e:
+        import traceback
+        print(f"\n❌ 處理過程中發生未預期的錯誤：{e}")
+        print(traceback.format_exc())
+    finally:
+        print("釋放資源...")
+        cap.release()
+        out.release()
+        cv2.destroyAllWindows()
 
-    cv2.imshow("CarFlow",frame)
-    out.write(frame)
-    if cv2.waitKey(1)&0xFF==27: break
+        print(f"寫入統計資料至 {output_csv_path}...")
+        with open(output_csv_path, "w", newline="") as f:
+            wr = csv.writer(f)
+            wr.writerow(["route", "class", "count"])
+            for rt_name, cnts in route_counts.items():
+                for cls, c in cnts.items():
+                    wr.writerow([rt_name, cls, c])
+        
+        total_time = time.time() - t0
+        print("\n🎉 全部任務完成！")
+        print(f"📄  統計 CSV 已儲存：{output_csv_path}")
+        print(f"🎥  標註影片已儲存：{output_video_path}")
+        print(f"⏱️  總耗時：{total_time:.2f} 秒")
 
-cap.release(); out.release(); cv2.destroyAllWindows()
-
-# ---------- 輸出 CSV ----------
-os.makedirs("results",exist_ok=True)
-with open("results/counts.csv","w",newline="") as f:
-    wr=csv.writer(f); wr.writerow(["route","class","count"])
-    for rt,cnts in route_counts.items():
-        for cls,c in cnts.items(): wr.writerow([rt,cls,c])
-print("✅  統計寫入  results/counts.csv")
-print("🎥  完成標註影片 results/annotated.mp4")
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,42 @@
+# Python
+# --------
+# 虛擬環境
+.venv/
+venv/
+ENV/
+
+# Python 快取檔案
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 大型檔案與模型
+# --------
+# YOLO 模型檔案
+*.pt
+
+# 影片檔案
+# 忽略 videos 資料夾內的所有內容
+/videos/
+
+# 輸出結果
+# --------
+# 忽略 results 資料夾內的所有內容
+/results/
+
+# 忽略在根目錄可能產生的輸出檔 (以防萬一)
+night_annotated.mp4
+night_counts.csv
+annotated.mp4
+counts.csv
+
+# 作業系統與編輯器設定
+# --------
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

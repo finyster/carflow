@@ -1,4 +1,4 @@
-video_path: videos/my_road.mp4
+video_path: videos/night.mp4
 model_path: yolov8l.pt
 classes: [car, bus, truck, motorcycle]
 tracker_type: deepsort            # deepsort 或 sort
@@ -37,5 +37,5 @@ routes:
 
 skip_frame: 1                     # 每 N+1 幀做一次偵測
 show_fps: true
-save_csv: results/counts.csv
-save_video: results/annotated.mp4
+save_csv: results/night_counts.csv
+save_video: results/night_annotated.mp4
