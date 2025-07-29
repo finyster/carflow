@@ -4,26 +4,43 @@ import yaml
 import argparse
 from pathlib import Path
 
+"""
+line_selector_routes.py
+-----------------------
+Interactively define traffic‑counting routes for an intersection video.
+
+• Left‑click two points to create one line.  
+  ‑ **Entry line (green)** is drawn first,  
+  ‑ **Exit line (red)** follows automatically.  
+  Each entry/exit pair constitutes one route.
+• Press **r** to reset and redraw, **s** to save, **Esc** to quit without saving.
+• The script writes/updates `config.yml` with keys:
+    video_path: <input video>
+    routes:
+      - entry: {p1: [x, y], p2: [x, y]}
+        exit : {p1: [x, y], p2: [x, y]}
+
+Author : Lin J-H and Hjc , 2025
+"""
+
 # --- 參數設定 ---
 parser = argparse.ArgumentParser(description="Select entry/exit lines for each route")
-parser.add_argument("--video", required=True, help="要進行標註的影片路徑")
-parser.add_argument("--config", default="config.yaml", help="要讀取與儲存的設定檔路徑")
+parser.add_argument("--video", required=True)
+parser.add_argument("--config", default="config.yml")
 args = parser.parse_args()
 
 # --- 讀取影片第一幀 ---
 cap = cv2.VideoCapture(args.video)
 ret, frame = cap.read()
 if not ret:
-    raise RuntimeError("❌ 無法讀取影片檔案，請確認路徑是否正確。")
+    raise RuntimeError("❌ 無法讀取影片")
 
 # --- 全域變數 ---
 clicks = []
 routes = []
 route_idx = 1
 line_type = "entry"  # 切換 entry / exit
-original_frame = frame.copy() # 備份原始畫面以供重設
 
-# --- 滑鼠回呼函式 ---
 def mouse_cb(event, x, y, flags, _):
     global clicks, line_type, route_idx, frame
     if event == cv2.EVENT_LBUTTONDOWN:
@@ -36,8 +53,7 @@ def mouse_cb(event, x, y, flags, _):
             
             # 根據是 entry 或 exit 決定線的顏色
             color = (0, 255, 0) if line_type == "entry" else (0, 0, 255)
-            name = f"route{route_idx}"
-
+            name = f"route{route_idx}_{line_type}"
             cv2.line(frame, p1, p2, color, 2)
             cv2.putText(frame, f"{name}_{line_type}", p1, cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
@@ -60,10 +76,10 @@ def mouse_cb(event, x, y, flags, _):
 # --- 主程式 ---
 cv2.namedWindow("Select Entry/Exit Lines")
 cv2.setMouseCallback("Select Entry/Exit Lines", mouse_cb)
-print("👉 請依序畫線：先畫 route1 的綠色 entry，再畫 route1 的紅色 exit。")
-print("👉 可重複步驟以建立 route2, route3...")
-print("👉 按 s 儲存 | 按 r 重畫 | 按 Esc 不存檔離開")
+print("👉 每『兩點』成一線，先畫 entry（進入口），再畫 exit（出口），自動一組，想多畫幾組都可以！")
+print("👉 按 s 儲存，r 重畫，Esc 不存檔離開。")
 
+# Real-time preview loop: listen for user key commands.
 while True:
     cv2.imshow("Select Entry/Exit Lines", frame)
     key = cv2.waitKey(1) & 0xFF
@@ -74,21 +90,20 @@ while True:
         clicks.clear()
         route_idx = 1
         line_type = "entry"
-        print("🔄 重設完成，您可以重新開始畫線。")
-    
-    elif key == ord('s'): # 按 s 儲存
+        print("🔄 重設完成，重新畫線")
+    elif key == ord('s'):
         break
 
     elif key == 27: # 按 Esc 離開
         cap.release()
         cv2.destroyAllWindows()
-        print("⚠️  操作已取消，未儲存任何變更。")
+        print("⚠️ 取消儲存，離開")
         exit(0)
 
 cap.release()
 cv2.destroyAllWindows()
 
-# --- 寫入設定檔 ---
+# ---------- 寫入 config.yml ----------
 yaml_path = Path(args.config)
 
 # 如果設定檔存在，先讀取既有內容
@@ -106,5 +121,4 @@ cfg["routes"] = routes
 with open(yaml_path, "w", encoding="utf-8") as f:
     yaml.dump(cfg, f, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
-print(f"✅ 設定已成功儲存至 {yaml_path}")
-print(f"總共儲存了 {len(routes)} 條路線。")
+print(f"✅ 已寫入 {yaml_path}，總共 {len(routes)} 組 route (每組 entry/exit)")

@@ -1,29 +1,175 @@
 # CarFlow
 
-這個專案示範如何使用 YOLOv8 與自製 Centroid Tracker 進行車輛偵測與計數：
-- **main.py**：主程式，讀取 `config.yaml` 設定，執行偵測與畫面標註後輸出。
-- **config.yaml**：可設定影片路徑、偵測類別、entry/exit 線等參數。
-- **utils/**：
-  - **draw.py**：負責在影像上畫出線條、框線、計數等資訊。
-  - **tracker.py**：簡易中心點追蹤器。
-- **line_selector.py**：輔助繪製 entry/exit 線的工具。
-- **results/**：儲存輸出影片與計數 CSV。
-- **videos/**：預設放置輸入影片的資料夾。
+一個基於 YOLOv8 與自製 Centroid Tracker 的車輛偵測與計數系統，支援多人協作開發。
 
-## 使用方式
-1. 調整 `config.yaml` 以設定影片檔案及 routes。
-2. 執行：
+## 📋 專案概覽
+
+### 核心功能
+- **車輛偵測**：使用 YOLOv8 進行即時車輛識別
+- **目標追蹤**：自製 Centroid Tracker 追蹤車輛軌跡
+- **計數統計**：記錄車輛通過指定區域的數量
+- **視覺化輸出**：生成標註影片與統計數據
+
+### 專案結構
+```
+carflow/
+├── main.py              # 主程式入口
+├── config.yaml          # 配置檔案
+├── line_selector.py     # 互動式線條選取工具
+├── utils/               # 核心工具模組
+│   ├── draw.py         # 視覺化繪製功能
+│   ├── tracker.py      # 目標追蹤器
+│   └── __init__.py     # 模組初始化
+├── videos/             # 輸入影片資料夾
+├── results/            # 輸出結果資料夾
+└── carflow_notebook.ipynb  # 開發筆記本
+
+```
+
+## 🚀 快速開始
+
+### 環境需求
+- Python 3.8+
+- YOLOv8
+- OpenCV
+- NumPy
+
+### 安裝與執行
+1. 調整 `config.yaml` 設定影片路徑與偵測參數
+2. 執行主程式：
    ```bash
    python main.py
    ```
-3. 執行完成後，結果會輸出至 `results/annotated.mp4` 與 `results/counts.csv`。
+3. 查看結果：
+   - 標註影片：`results/annotated.mp4`
+   - 計數數據：`results/counts.csv`
 
-## 額外工具
-- `line_selector.py` 可用於互動式選取 entry/exit 線：
+### 工具使用
+- 互動式選取偵測線：
   ```bash
-  python line_selector.py --video <路徑>
+  python line_selector.py --video <影片路徑>
   ```
 
-歡迎根據需求修改或擴充此專案。
+## 👥 團隊協作
 
-https://drive.google.com/file/d/17Hxyu82MwKzdjBjnB9q-SVuYnvPdmveB/view?usp=drive_link
+### 開發成員
+| 成員 | 角色 | 負責模組 | 聯絡方式 |
+|------|------|----------|----------|
+| @henrylin | 專案負責人 | 整體架構、main.py | - |
+| - | 演算法工程師 | utils/tracker.py | - |
+| - | 前端工程師 | utils/draw.py | - |
+| - | 測試工程師 | 測試腳本 | - |
+
+### 分工表
+- [ ] **核心演算法**
+  - [x] YOLOv8 整合
+  - [x] Centroid Tracker 實作
+  - [ ] 追蹤演算法優化
+  - [ ] 多目標處理改進
+
+- [ ] **功能模組**
+  - [x] 基礎偵測功能
+  - [x] 視覺化繪製
+  - [ ] 配置檔案擴充
+  - [ ] 批次處理功能
+
+- [ ] **使用者介面**
+  - [x] 命令列介面
+  - [x] 互動式線條選取
+  - [ ] Web 介面開發
+  - [ ] 參數調整 GUI
+
+- [ ] **測試與文檔**
+  - [ ] 單元測試
+  - [ ] 整合測試
+  - [ ] 效能測試
+  - [ ] API 文檔
+
+## 📊 專案進度
+
+### 當前版本：v0.1.0
+
+#### 已完成功能 ✅
+- [x] 基礎車輛偵測
+- [x] 簡易目標追蹤
+- [x] 計數統計功能
+- [x] 標註影片輸出
+- [x] 配置檔案支援
+
+#### 開發中功能 🚧
+- [ ] 追蹤演算法優化
+- [ ] 多攝影機支援
+- [ ] 即時處理模式
+
+#### 計劃功能 📝
+- [ ] Web 管理介面
+- [ ] 資料庫整合
+- [ ] 雲端部署支援
+- [ ] API 服務
+
+### 版本規劃
+- **v0.2.0**：追蹤演算法優化、多攝影機支援
+- **v0.3.0**：Web 介面、即時處理
+- **v1.0.0**：完整功能版本
+
+## 🔧 開發規範
+
+### 程式碼規範
+- 使用 Python PEP 8 風格
+- 函數需要完整的 docstring
+- 變數命名使用英文且具描述性
+
+### Git 工作流程
+1. 從 `master` 建立功能分支
+2. 開發完成後提交 Pull Request
+3. 經過 Code Review 後合併
+
+### 提交訊息格式
+```
+<type>: <description>
+
+例如：
+feat: 新增多攝影機支援功能
+fix: 修復追蹤器記憶體洩漏問題
+docs: 更新 README 文檔
+```
+
+## 🐛 問題回報
+
+### 已知問題
+| 問題描述 | 影響等級 | 負責人 | 狀態 |
+|----------|----------|--------|------|
+| 追蹤器在高密度車流時效能下降 | 中 | - | 待修復 |
+| 配置檔案錯誤處理不完整 | 低 | - | 待修復 |
+
+### 回報新問題
+請在 Issues 中使用以下模板：
+```
+**問題描述**：
+**重現步驟**：
+**預期行為**：
+**實際行為**：
+**環境資訊**：
+```
+
+## 📚 相關資源
+
+- [專案展示影片](https://drive.google.com/file/d/17Hxyu82MwKzdjBjnB9q-SVuYnvPdmveB/view?usp=drive_link)
+- [YOLOv8 官方文檔](https://docs.ultralytics.com/)
+- [OpenCV 教學](https://opencv.org/)
+
+## 📝 更新日誌
+
+### 2024-XX-XX
+- 新增 Jupyter Notebook 開發環境
+- 改進追蹤器穩定性
+- 更新專案文檔結構
+
+### 2024-XX-XX
+- 初始版本發布
+- 基礎車輛偵測功能
+- 命令列介面完成
+
+---
+
+歡迎貢獻代碼或提供建議！請閱讀上述開發規範並遵循工作流程。
