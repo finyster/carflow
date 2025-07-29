@@ -40,3 +40,74 @@ counts.csv
 
 # Windows
 Thumbs.db
+
+#############################
+#  Python ─ 既有規則
+#############################
+# 虛擬環境
+.venv/
+venv/
+ENV/
+
+# Python 快取檔案
+__pycache__/
+*.py[cod]
+*$py.class
+
+#############################
+#  深度學習模型 / 大型檔案
+#############################
+# YOLO / PyTorch / ONNX / TensorRT 權重
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+
+#############################
+#  資料 & 輸出
+#############################
+# ➜ 影片
+*.mp4
+*.mkv
+*.avi
+*.mov
+/videos/             # 已有規則，保留
+
+# ➜ 影像 (以防各類截圖或可視化輸出誤入版本庫)
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.webp
+
+# ➜ 文字／表格資料
+*.csv
+*.tsv
+*.xlsx
+
+# ➜ 其他常見 JSON／YAML 產生物（視專案需求保留核心設定檔）
+*.json
+!config*.json        # 如果有重要設定檔要納入版本控制，可反向排除
+*.yaml
+*.yml
+!config*.yml         # 同上
+
+# ➜ 任務/實驗輸出
+/results/            # 已有規則，保留
+# 如果還會在根目錄產生報表或影片，維持原先 ignore
+night_annotated.mp4
+night_counts.csv
+annotated.mp4
+counts.csv
+
+#############################
+#  編輯器 / OS 產生物
+#############################
+# VS Code
+.vscode/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db

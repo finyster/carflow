@@ -1,0 +1,16 @@
+python line_selector.py --video <影片路徑>   #old 
+python line_selector.py --video videos/complex-1.mkv
+
+python quad_selector.py --video videos/complex-2_demo.mp4 
+python main.py
+python perspective_transformer.py --video <您的影片>
+python video_processor.py --input videos/complex-1.mkv --output videos/complex-1_demo.mp4 --duration 30
+python video_processor.py --input videos/complex-2.mkv --output videos/complex-2_demo.mp4 --duration 30
+python plot_trajectories.py --background video
+python plot_trajectories.py --background white
+python plot_trajectories.py --background black
+
+python main_visualization.py 
+python plot_matplotlib.py
+
+streamlit run app.py

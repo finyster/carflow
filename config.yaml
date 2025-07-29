@@ -1,41 +1,43 @@
 video_path: videos/my_road.mp4
-model_path: yolov8l.pt
-classes: [car, bus, truck, motorcycle]
-tracker_type: deepsort            # deepsort 或 sort
-
-routes:
-  - name: route1
-    entry:
-      p1:
-      - 766
-      - 589
-      p2:
-      - 1115
-      - 615
-    exit:
-      p1:
-      - 432
-      - 648
-      p2:
-      - 1046
-      - 721
-  - name: route2
-    entry:
-      p1:
-      - 1195
-      - 914
-      p2:
-      - 1911
-      - 808
-    exit:
-      p1:
-      - 1194
-      - 683
-      p2:
-      - 1489
-      - 674
-
-skip_frame: 1                     # 每 N+1 幀做一次偵測
+model_path: model/yolov10l.pt
+classes:
+- car
+- bus
+- truck
+- motorcycle
+tracker_type: deepsort
+zones:
+- name: Z1
+  points:
+  - - 1850
+    - 792
+  - - 1
+    - 704
+  - - 751
+    - 624
+  - - 1630
+    - 703
+- name: Z2
+  points:
+  - - 783
+    - 617
+  - - 948
+    - 590
+  - - 819
+    - 526
+  - - 758
+    - 552
+- name: Z3
+  points:
+  - - 939
+    - 601
+  - - 1362
+    - 650
+  - - 1129
+    - 551
+  - - 1021
+    - 539
+skip_frame: 1
 show_fps: true
 save_csv: results/counts.csv
 save_video: results/annotated.mp4

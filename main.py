@@ -1,181 +1,153 @@
-# nightMain.py – 最終修正版 v2
+# main.py – v10.4 (穩定版：DeepSORT + 多邊形 + 雙重計數 + 右對齊修正)
 import os, csv, time, yaml, cv2
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, deque
 from ultralytics import YOLO
-# 確保您的 tracker.py 檔案在 utils 資料夾中
-from utils.tracker import Tracker
+from deep_sort_realtime.deepsort_tracker import DeepSort
+from tqdm import tqdm
 
-# ---------- 幾何工具 (無變動) ----------
-def ccw(a, b, c):
-    return (c[1]-a[1])*(b[0]-a[0]) > (b[1]-a[1])*(c[0]-a[0])
-
-def crossed(p_prev, p_now, l1, l2):
-    return ccw(p_prev, p_now, l1) != ccw(p_prev, p_now, l2)
+# --- 輔助函式 ---
+def is_inside_polygon(point, zone_points):
+    return cv2.pointPolygonTest(np.array(zone_points, np.int32), point, False) >= 0
 
 def get_color(cls):
-    pal = {
-        "car": (0,255,255), "bus": (255,0,0),
-        "truck": (0,0,255), "motorcycle": (0,255,0)
-    }
-    return pal.get(cls, (200,200,200))
+    pal = {"car": (0, 255, 255), "bus": (255, 0, 0), "truck": (0, 0, 255), "motorcycle": (0, 255, 0)}
+    return pal.get(cls, (200, 200, 200))
 
 # ---------- 主要執行區塊 ----------
 def main():
-    # 1. 讀取設定檔
     try:
-        with open("night_config.yaml") as f:
+        with open("config.yaml") as f:
             cfg = yaml.safe_load(f)
     except FileNotFoundError:
-        print("❌ 錯誤：找不到 night_config.yaml 設定檔！")
-        return
+        print("❌ 錯誤：找不到 config.yaml 設定檔！"); return
 
-    # 從設定檔讀取參數
     video_path = cfg.get("video_path")
     model_path = cfg.get("model_path", "yolov8s.pt")
-    output_video_path = cfg.get("save_video", "results/output.mp4")
-    output_csv_path = cfg.get("save_csv", "results/counts.csv")
+    output_video_path = cfg.get("save_video", "results/annotated.mp4")
+    route_csv_path = cfg.get("save_csv", "results/route_counts.csv")
+    zone_csv_path = "results/zone_traffic.csv"
+
     target_classes = cfg.get("classes", ["car", "bus", "truck", "motorcycle"])
-    skip_frame = cfg.get("skip_frame", 1)
-    routes = cfg.get("routes", [])
+    zones = cfg.get("zones", [])
 
-    # 2. 初始化模型與工具
-    print("初始化模型...")
-    model = YOLO(model_path)
-    try:
-        with open("coco.txt") as f:
-            CLASSES = [c.strip() for c in f.readlines()]
-    except FileNotFoundError:
-        print("❌ 錯誤：找不到 coco.txt 類別檔！")
-        return
-    tracker = Tracker()
+    print("初始化模型..."); model = YOLO(model_path)
+    tracker = DeepSort(max_age=50, n_init=3, nms_max_overlap=1.0)
 
-    # 3. 初始化影片讀取與寫入
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"❌ 錯誤：無法開啟影片檔案：{video_path}")
-        return
+    W, H, FPS = (int(cap.get(p)) for p in [cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT, cv2.CAP_PROP_FPS])
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    out = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), FPS or 30, (W, H))
 
-    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    FPS = cap.get(cv2.CAP_PROP_FPS) or 30
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    os.makedirs("results", exist_ok=True)
-    out = cv2.VideoWriter(output_video_path, fourcc, FPS, (W, H))
-
-    if not out.isOpened():
-        print(f"❌ 錯誤：無法初始化影片寫入器。請檢查您的 OpenCV/FFmpeg 安裝。")
-        cap.release()
-        return
-
-    # 4. 初始化統計變數
-    vehicle_info, last_center = {}, {}
+    vehicle_info = {}
     route_counts = defaultdict(lambda: defaultdict(int))
-    route_serials = defaultdict(lambda: defaultdict(int))
-    frame_idx, t0 = 0, time.time()
-
-    print(f"🚀 開始處理影片：{video_path}")
-
+    zone_counts = defaultdict(lambda: defaultdict(int))
+    track_history = defaultdict(lambda: deque(maxlen=50))
+    
+    print(f"🚀 開始處理影片（雙重計數模式）: {video_path}")
     try:
-        while True:
+        for _ in tqdm(range(total_frames), desc="影片處理進度"):
             ret, frame = cap.read()
-            if not ret:
-                print("\n影片處理完成。")
-                break
-            frame_idx += 1
+            if not ret: break
 
-            if frame_idx % 100 == 0:
-                elapsed_time = time.time() - t0
-                fps_estimate = frame_idx / elapsed_time if elapsed_time > 0 else 0
-                print(f"  處理中... 第 {frame_idx} 幀 (當前速度: {fps_estimate:.1f} FPS)")
-
-            # AI 偵測與追蹤邏輯
-            results = model(frame, verbose=False)[0]
-            dets, det_cls = [], []
-            for box in results.boxes:
-                cls_name = CLASSES[int(box.cls[0])]
+            results = model(frame, verbose=False, conf=0.2, imgsz=1280)
+            
+            detections = []
+            for box in results[0].boxes:
+                cls_name = model.names[int(box.cls[0])]
                 if cls_name in target_classes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    dets.append([x1, y1, x2, y2])
-                    det_cls.append(cls_name)
+                    conf = float(box.conf[0])
+                    detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls_name))
 
-            rects = [[x, y, x2-x, y2-y] for (x, y, x2, y2) in dets]
-            tracks = tracker.update(rects)
+            tracks = tracker.update_tracks(detections, frame=frame)
+            
+            for track in tracks:
+                if not track.is_confirmed() or track.time_since_update > 1: continue
+                track_id = track.track_id; cls_name = track.get_det_class(); ltrb = track.to_ltrb()
+                x1, y1, x2, y2 = map(int, ltrb)
+                cx, cy = (x1 + x2) // 2, y2
+                track_history[track_id].append((cx, cy))
+                
+                current_zone = next((z['name'] for z in zones if is_inside_polygon((cx, cy), z['points'])), None)
 
-            # 跨線計數與繪圖邏輯
-            for (x, y, w, h, tid), cls_name in zip(tracks, det_cls):
-                cx, cy = x + w // 2, y + h // 2
-                if tid in last_center:
-                    prev_center = last_center[tid]
-                    if tid not in vehicle_info:
-                        for rt_cfg in routes:
-                            pt1 = (int(rt_cfg["entry"]["p1"][0]), int(rt_cfg["entry"]["p1"][1]))
-                            pt2 = (int(rt_cfg["entry"]["p2"][0]), int(rt_cfg["entry"]["p2"][1]))
-                            if crossed(prev_center, (cx, cy), pt1, pt2):
-                                vehicle_info[tid] = {"route": rt_cfg["name"], "serial": None, "class": cls_name}
-                                break
-                    elif vehicle_info[tid]["serial"] is None:
-                        rt_name = vehicle_info[tid]["route"]
-                        rt_cfg = next((r for r in routes if r["name"] == rt_name), None)
-                        if rt_cfg:
-                            pt1 = (int(rt_cfg["exit"]["p1"][0]), int(rt_cfg["exit"]["p1"][1]))
-                            pt2 = (int(rt_cfg["exit"]["p2"][0]), int(rt_cfg["exit"]["p2"][1]))
-                            if crossed(prev_center, (cx, cy), pt1, pt2):
-                                route_serials[rt_name][cls_name] += 1
-                                serial = route_serials[rt_name][cls_name]
-                                vehicle_info[tid]["serial"] = serial
-                                route_counts[rt_name][cls_name] += 1
-                last_center[tid] = (cx, cy)
-
-                # 繪製標籤與框線
+                if current_zone:
+                    if track_id not in vehicle_info:
+                        vehicle_info[track_id] = {"last_zone": current_zone, "class": cls_name}
+                        zone_counts[current_zone][cls_name] += 1
+                    else:
+                        info = vehicle_info[track_id]
+                        if current_zone != info['last_zone']:
+                            route_name = f"{info['last_zone']}_to_{current_zone}"
+                            route_counts[route_name][cls_name] += 1
+                            zone_counts[current_zone][cls_name] += 1
+                            info['last_zone'] = current_zone
+                
                 color = get_color(cls_name)
-                label = f'{cls_name} ID:{tid}'
-                if tid in vehicle_info and vehicle_info[tid]["serial"]:
-                    label = f'{vehicle_info[tid]["route"]}:{vehicle_info[tid]["serial"]} {cls_name}'
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            # 繪製路線與統計數據
-            for rt_cfg in routes:
-                entry_p1 = (int(rt_cfg["entry"]["p1"][0]), int(rt_cfg["entry"]["p1"][1]))
-                entry_p2 = (int(rt_cfg["entry"]["p2"][0]), int(rt_cfg["entry"]["p2"][1]))
-                exit_p1 = (int(rt_cfg["exit"]["p1"][0]), int(rt_cfg["exit"]["p1"][1]))
-                exit_p2 = (int(rt_cfg["exit"]["p2"][0]), int(rt_cfg["exit"]["p2"][1]))
-                cv2.line(frame, entry_p1, entry_p2, (0, 255, 0), 2)
-                cv2.line(frame, exit_p1, exit_p2, (0, 0, 255), 2)
-
+                label = f'{cls_name} ID:{track_id}'
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                for i in range(1, len(track_history[track_id])):
+                    if track_history[track_id][i-1] is None or track_history[track_id][i] is None: continue
+                    cv2.line(frame, track_history[track_id][i-1], track_history[track_id][i], color, 2)
+            
+            for z in zones:
+                pts = np.array(z['points'], np.int32)
+                cv2.polylines(frame, [pts], True, (255, 255, 0), 2)
+                text_pos = tuple(pts[0])
+                cv2.putText(frame, z['name'], (text_pos[0], text_pos[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 2)
+            
             y0 = 40
-            # 【修正】這裡的 rt 就是路線名稱 (字串)，不應該用 rt["name"]
-            for i, (rt_name, cnts) in enumerate(route_counts.items()):
-                txt = f'{rt_name}: ' + ' | '.join([f'{k}={v}' for k, v in cnts.items()])
-                cv2.putText(frame, txt, (20, y0 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            for i, (rt,c) in enumerate(route_counts.items()):
+                s = ", ".join([f"{cls}={n}" for cls,n in c.items()])
+                cv2.putText(frame, f'{rt}: {s}', (20,y0+i*30), cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,255,255),2)
 
+            # ✨【核心修改】✨ 繪製單一 Zone 總流量計數 (改為右對齊)
+            y0_right = 40
+            right_margin = 20 # 離螢幕右邊緣的距離
+            font_face = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.7
+            font_thickness = 2
+
+            # 繪製標題 "Zone Traffic"
+            title_text = "Zone Traffic"
+            (title_w, title_h), _ = cv2.getTextSize(title_text, font_face, 0.8, 2)
+            cv2.putText(frame, title_text, (W - right_margin - title_w, y0_right), font_face, 0.8, (255,0,255), 2)
+            y0_right += 35
+
+            # 繪製每一條 Zone 的計數
+            for i, (zn, c) in enumerate(zone_counts.items()):
+                s = ", ".join([f"{cls}={n}" for cls, n in c.items()])
+                text_line = f'{zn}: {s}'
+                
+                # 計算文字的寬度
+                (text_w, text_h), _ = cv2.getTextSize(text_line, font_face, font_scale, font_thickness)
+                
+                # 計算新的 x 座標，使其右對齊
+                text_x = W - right_margin - text_w
+                text_y = y0_right + i * 30
+
+                # 使用新的座標來繪製文字
+                cv2.putText(frame, text_line, (text_x, text_y), font_face, font_scale, (255, 0, 255), font_thickness)
+            
             out.write(frame)
 
-    except Exception as e:
-        import traceback
-        print(f"\n❌ 處理過程中發生未預期的錯誤：{e}")
-        print(traceback.format_exc())
     finally:
-        print("釋放資源...")
-        cap.release()
-        out.release()
-        cv2.destroyAllWindows()
+        print("資源釋放與存檔..."); cap.release(); out.release(); cv2.destroyAllWindows()
+        with open(route_csv_path, "w", newline="") as f:
+            wr = csv.writer(f); wr.writerow(["route", "class", "count"])
+            for r, c in route_counts.items():
+                for cls, n in c.items(): wr.writerow([r, cls, n])
+        print(f"✅ 路徑計數已儲存至: {route_csv_path}")
 
-        print(f"寫入統計資料至 {output_csv_path}...")
-        with open(output_csv_path, "w", newline="") as f:
-            wr = csv.writer(f)
-            wr.writerow(["route", "class", "count"])
-            for rt_name, cnts in route_counts.items():
-                for cls, c in cnts.items():
-                    wr.writerow([rt_name, cls, c])
+        with open(zone_csv_path, "w", newline="") as f:
+            wr = csv.writer(f); wr.writerow(["zone", "class", "count"])
+            for z, c in zone_counts.items():
+                for cls, n in c.items(): wr.writerow([z, cls, n])
+        print(f"✅ 區域總流量已儲存至: {zone_csv_path}")
         
-        total_time = time.time() - t0
         print("\n🎉 全部任務完成！")
-        print(f"📄  統計 CSV 已儲存：{output_csv_path}")
-        print(f"🎥  標註影片已儲存：{output_video_path}")
-        print(f"⏱️  總耗時：{total_time:.2f} 秒")
 
 if __name__ == "__main__":
     main()
